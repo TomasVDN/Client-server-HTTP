@@ -224,7 +224,10 @@ class ServerThread(threading.Thread):
                 break
 
             # Process request.
-            request = Request(sep.header, sep.body)
+            try:
+                request = Request(sep.header, sep.body)
+            except Exception:
+                break
 
             # Get the correct handler for the given method. Also checks for errors (HTTP version, Host,...).
             try:
@@ -238,7 +241,10 @@ class ServerThread(threading.Thread):
                 handler = self.handle_501
 
             # Make response
-            response = handler(request)
+            try:
+                response = handler(request)
+            except Exception:
+                response = self.handle_500()
 
             # Send response
             self.connection.send(response)
@@ -267,6 +273,7 @@ class ServerThread(threading.Thread):
         400: 'Bad Request',  # Host not present
         404: 'Not Found',  # File not found
         412: 'Precondition Failed',  # Response if file has been modified (PUT, POST, If-Unmodified-Since)
+        500: 'Internal Server Error',  # Response if there was an error while processing the intended response
         501: 'Not Implemented',  # Response for unimplemented methods (DELETE, OPTIONS,...)
         505: 'HTTP Version Not Supported',  # Response for unsupported HTTP versions
     }
@@ -296,6 +303,19 @@ class ServerThread(threading.Thread):
         headers += "Date: " + time.strftime("%a, %d %b %Y %I:%M:%S", time.gmtime()) + " GMT\r\n"
 
         return headers.encode()
+
+    # 50 handler (Internal Server Error).
+    def handle_500(self, request):
+        response_line = self.response_line(status_code=500)
+
+        blank_line = b"\r\n"
+
+        response_body = b"<h1>500 Internal Server Error</h1>"
+
+        extra_headers = {'Content-Type': 'text/html', 'Content-Length': len(response_body)}
+        response_headers = self.response_headers(extra_headers)
+
+        return b"".join([response_line, response_headers, blank_line, response_body, blank_line, blank_line])
 
     # 501 handler (Not implemented).
     def handle_501(self, request):
@@ -413,7 +433,7 @@ class ServerThread(threading.Thread):
 
         return b"".join([response_line, response_headers, blank_line, blank_line])
 
-    # PUT handler
+    # PUT handler. Received documents will be put into the documents folder.
     def handle_PUT(self, request):
         return_path = "documents" + request.uri
         filename = "documents" + request.uri
@@ -452,7 +472,7 @@ class ServerThread(threading.Thread):
 
         return b"".join([response_line, response_headers, blank_line, blank_line])
 
-    # POST handler
+    # POST handler. Received documents will be put into the documents folder.
     def handle_POST(self, request):
         return_path = "documents" + request.uri
         filename = "documents" + request.uri

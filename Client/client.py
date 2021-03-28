@@ -20,6 +20,9 @@ class Request:
         # Method
         self.method = list_of_input_element[0]
 
+        if "http://" in list_of_input_element[1]:
+            list_of_input_element[1] = list_of_input_element[1][7:]
+
         # Host & resource. If no resource is given, set it to /.
         pos = list_of_input_element[1].find("/")
         if pos == -1:
@@ -46,18 +49,10 @@ class Request:
         # Appends Content type and length to the header & reads the body.
         if self.method == "PUT" or self.method == "POST":
 
-            file = input("Please, enter a file to send:\n")
-            if os.path.exists(file):
-                # find out a file's MIME type
-                # if nothing is found, just send `text/html`
-                content_type = mimetypes.guess_type(file)[0] or 'text/html'
+            request_body = input("Please, enter string to send:\n").encode()
 
-                with open(file, 'rb') as f:
-                    request_body = f.read()
-            else:
-                raise Exception
 
-            self.request += 'Content-Type: {}\r\nContent-Length: {}\r\n'.format(content_type, len(request_body)).encode()
+            self.request += 'Content-Type: text/plain\r\nContent-Length: {}\r\n'.format(len(request_body)).encode()
 
         # Appends the asked file to the body (if there is one)
         if request_body:
@@ -68,8 +63,12 @@ class Request:
 
     # Used to change the resource of the request (for images)
     def change_resource(self, method, resource):
+        # Change method
         self.method = method
+
         self.resource = resource
+
+        # Recompile request
         self.make_request()
 
 ##############################
@@ -188,41 +187,45 @@ class Response:
 
 
 # Function to import the images from a HTML file. Uses BeautifulSoup to parse the HTML. The folder structure remains almost
-# the same as on the server.
+# the same as on the server. No support for external images.
 def import_images(connection, request, response):
     soup = BeautifulSoup(response.body.decode(response.encoding), "html.parser")
 
     # Find all images
     images = soup.findAll('img')
 
+    external_image = []
     # Send a GET request to get all images.
     for image in images:
         src = image['src']
 
-        if src[0] != "/":
-            src = "/" + src
+        if "http" in src or "www" in src:
+            external_image.append(image)
+        else:
+            if src[0] != "/":
+                src = "/" + src
 
-        request.change_resource("GET", src)
+            request.change_resource("GET", src)
 
-        # Send request
-        print("[SENDING]\n" + request.request.decode())
-        connection.sendall(request.request)
+            # Send request
+            print("[SENDING]\n" + request.request.decode())
+            connection.sendall(request.request)
 
-        # Receive response
-        response = Response(connection)
-        print("[RECEIVED]\n" + response.header)
+            # Receive response
+            response = Response(connection)
+            print("[RECEIVED]\n" + response.header)
 
-        # Check if directories exists. If not, create it.
-        directory = "output" + os.path.dirname(src)
-        if not os.path.exists(directory):
-            os.makedirs(directory)
+            # Check if directories exists. If not, create it.
+            directory = "output" + os.path.dirname(src)
+            if not os.path.exists(directory):
+                os.makedirs(directory)
 
-        with open("output/" + src, "wb") as out:
-            out.write(response.body)
-            out.close()
+            with open("output/" + src, "wb") as out:
+                out.write(response.body)
+                out.close()
 
-        if src[0] == "/": src = src[1:]
-        image['src'] = src
+            if src[0] == "/": src = src[1:]
+            image['src'] = src
 
     # Do the same as above, but with lowsrc.
     for image in images:
@@ -254,6 +257,47 @@ def import_images(connection, request, response):
             if src[0] == "/": src = src[1:]
             image['src'] = src
 
+    connection.close()
+
+    for image in external_image:
+        src = image['src']
+
+        if "http://" in src:
+            src = src[7:]
+
+        # Make a request
+        request = Request(["GET",src])
+        src = request.resource
+        if src[0] != "/":
+            src = "/" + src
+
+        # Initiate socket connection
+        ip = socket.gethostbyname(request.host)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((ip, int(request.port)))
+
+        # Send Request
+        print("[SENDING]\n" + request.request.decode())
+        sock.sendall(request.request)
+
+        # Receive response
+        response = Response(sock)
+        print("[RECEIVED]\n" + response.header)
+
+        # Check if directories exists. If not, create it.
+        directory = "output" + os.path.dirname(src)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+
+        with open("output/" + src, "wb") as out:
+            out.write(response.body)
+            out.close()
+
+        if src[0] == "/": src = src[1:]
+        image['src'] = src
+
+        sock.close()
+
     # Write html to output/output.html
     with open("output/output.html", "w") as out:
         out.write(str(soup))
@@ -263,6 +307,9 @@ def import_images(connection, request, response):
 
 
 def main(list):
+    if len(list) < 2:
+        return
+
     # Clean the output folder
     with os.scandir("output") as entries:
         for entry in entries:
@@ -290,8 +337,8 @@ def main(list):
     # If method is GET and everything happened as intended, get images.
     if request.method == "GET" and int(response.code) == 200:
         import_images(sock, request, response)
-
-    sock.close()
+    else:
+        sock.close()
 
 if __name__ == '__main__':
     main(sys.argv[1:])
